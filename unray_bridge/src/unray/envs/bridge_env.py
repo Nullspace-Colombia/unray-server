@@ -498,10 +498,10 @@ class MultiAgentBridgeEnv(BridgeEnv, MultiAgentEnv):
         data_size = self.to_byte(n_obs + self.get_amount_agents() * 3) # bytes from read 
 
         if self.reset_count > 0:
-            act_2_send = np.insert(action, 0, self.ID)
+            #act_2_send = np.insert(action, 0, self.ID)
 
             #send action to UE5
-            self.client_handler.send(act_2_send, self.consock) # Send to socket in UE5
+            self.client_handler.send(action, self.consock) # Send to socket in UE5
 
             #receive state vector from UE5
             state = self.client_handler.recv(data_size, self.consock)
@@ -578,7 +578,8 @@ class MultiAgentBridgeEnv(BridgeEnv, MultiAgentEnv):
             ---
 
         """
-        if self.dummy_action[self.agents_names[0]] == '':
+
+        if len(str(self.dummy_action[self.agents_names[0]])) == 0:
             print("FIRST RESET")
             for agent in self.agents_names:
                 self.dummy_action[agent] = self.act_space_dict[agent].sample()
@@ -588,7 +589,7 @@ class MultiAgentBridgeEnv(BridgeEnv, MultiAgentEnv):
             obs_dict = self.get_dict_template() # from agents names 
             for agent in obs_dict:
                 obs_dict[agent] = np.asarray(self.obs_dict[agent], dtype=self.obs_space_dict[agent].dtype)
-            print("OBS DICT: ", obs_dict)
+            #print("OBS DICT: ", obs_dict)
         self.reset_count = self.reset_count+1
         return obs_dict, {}
 
