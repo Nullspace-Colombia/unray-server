@@ -497,10 +497,10 @@ class MultiAgentBridgeEnv(BridgeEnv, MultiAgentEnv):
         data_size = self.to_byte(n_obs + self.get_amount_agents() * 3) # bytes from read 
 
         if self.reset_count > 0:
-            act_2_send = np.insert(action, 0, self.ID)
+            #act_2_send = np.insert(action, 0, self.ID)
 
             #send action to UE5
-            self.client_handler.send(act_2_send, self.consock) # Send to socket in UE5
+            self.client_handler.send(action, self.consock) # Send to socket in UE5
 
             #receive state vector from UE5
             state = self.client_handler.recv(data_size, self.consock)
