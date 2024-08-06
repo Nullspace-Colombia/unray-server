@@ -67,7 +67,7 @@ class BridgeEnv(gymEnv):
         self.dummy_action = None
         self.validation = validation
         self.multiagent = multiagent 
-        self.reset_count = 0
+        self.reset_count = -2
         
         try: 
             self.observation_space = config["observation"] # Get imported space 
@@ -577,7 +577,7 @@ class MultiAgentBridgeEnv(BridgeEnv, MultiAgentEnv):
             ---
 
         """
-        if self.dummy_action[self.agents_names[0]] == '':
+        if len(str(self.dummy_action[self.agents_names[0]])) == 0:
             print("FIRST RESET")
             for agent in self.agents_names:
                 self.dummy_action[agent] = self.act_space_dict[agent].sample()
@@ -587,7 +587,7 @@ class MultiAgentBridgeEnv(BridgeEnv, MultiAgentEnv):
             obs_dict = self.get_dict_template() # from agents names 
             for agent in obs_dict:
                 obs_dict[agent] = np.asarray(self.obs_dict[agent], dtype=self.obs_space_dict[agent].dtype)
-            print("OBS DICT: ", obs_dict)
+            #print("OBS DICT: ", obs_dict)
         self.reset_count = self.reset_count+1
         return obs_dict, {}
 
