@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unray"
-version = "1.0.6"
+version = "1.0.8"
 authors = [
   { name="Valentina Hernández", email="vahernandezmo@unal.edu.co" },
   { name="Andrés Morales", email="amoralesma@unal.edu.co" },

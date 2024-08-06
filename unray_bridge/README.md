@@ -8,6 +8,7 @@ This package contains the tools to connect the framework to Unreal Engine envs.
 # Setting up
 
 We recommend conda for creating a virtualenv and installing the dependendencies. Currently, Ray is available in Python 3.10 or less, so we recommend creating a virtualenv with version 3.10.
+To make sure the package works correctly, use with ray[rllib]==2.10. 
 
 
 # RL Environment for simple training
@@ -173,9 +174,9 @@ This dictionary defines the independent spaces for each of the agents. You will 
 
 | Parameter | Description |
 |--------|---------|
-|```can_show```| The observations which will be available to other agents in the environment | 
+|```can_show```| The observations which will be available during training | 
 | ```can_see```| How many observations can this agent see from other agents |
-| ```obs_order```  | The order of the observations this agent can see from the other agents |
+| ```obs_order```  | The order of the observations of this agent |
 
 
 Once you have your *env_config* dict ready, we'll create the ```Unray``` object, which will allow us to train our environment with Unray. 
@@ -255,8 +256,8 @@ env_config  = {
         "agent-1":{
             "observation": BridgeSpaces.MultiDiscrete([64, 64]),
             "action": BridgeSpaces.Discrete(4),
-            "can_show": 1, # Amount of observations int obs stack
-            "can_see": 2, # Amount of observations required in training 
+            "can_show": 1, 
+            "can_see": 2, 
             "obs_order": {   
                 "agent-1": [0], 
                 "agent-2": [0]
@@ -265,7 +266,7 @@ env_config  = {
         "agent-2":{
             "observation": BridgeSpaces.MultiDiscrete([64, 64]),
             "action": BridgeSpaces.Discrete(4),
-            "can_show": 1, # Amount of observations int obs stack
+            "can_show": 1, 
             "can_see": 2,
             "obs_order": {
                 "agent-2": [0], 
