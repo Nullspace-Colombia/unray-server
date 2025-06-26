@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unray"
+version = "1.0.9"
+authors = [
+  { name="Valentina Hernández", email="vahernandezmo@unal.edu.co" },
+  { name="Andrés Morales", email="amoralesma@unal.edu.co" },
+    
+]
+description = "Framework for trainning Reinforcement Learning envs with RLlib and Unreal Eninge 5"
+readme = "README.md"
+requires-python = ">=3.8"
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/Nullspace-Colombia/unray-bridge/"
+Issues = "https://github.com/Nullspace-Colombia/unray-bridge/issues"
