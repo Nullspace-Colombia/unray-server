@@ -1,5 +1,5 @@
 
-ray[rllib]<=2.3.0
+ray[rllib]==2.10.0
 Gymnasium<=0.26.3
 gymnasium-notices<=0.0.1
 
