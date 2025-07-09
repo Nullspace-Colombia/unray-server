@@ -124,7 +124,7 @@ if __name__ == "__main__":
         .env_runners(
             # Point RLlib to the custom EnvRunner to be used here.
             env_runner_cls=TcpClientInferenceEnvRunner,
-            rollout_fragment_length= 12
+            rollout_fragment_length= 400
         )
         .training(
             num_epochs=10,
