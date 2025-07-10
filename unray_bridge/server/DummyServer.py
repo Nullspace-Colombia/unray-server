@@ -82,7 +82,7 @@ parser = add_rllib_example_script_args(
 )
 parser.set_defaults(
     enable_new_api_stack=True,
-    num_env_runners=1,
+    num_env_runners=5,
 )
 parser.add_argument(
     "--port",

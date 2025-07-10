@@ -460,9 +460,9 @@ def _send_message(sock_, message: dict):
         sock_.sendall(header + body)
         print("Sending message..")
         print("Header:", header)
-        print("Body:", body)
-        print("Full Message (hex):", (header + body).hex(' ', 1))  # Byte por byte en hex
-        print("As UTF-8 string:", (header + body).decode('utf-8', errors='replace'))
+        #print("Body:", body)
+        #print("Full Message (hex):", (header + body).hex(' ', 1))  # Byte por byte en hex
+        #print("As UTF-8 string:", (header + body).decode('utf-8', errors='replace'))
     except Exception as e:
         raise ConnectionError(
             f"Error sending message {message} to server on socket {sock_}! "
