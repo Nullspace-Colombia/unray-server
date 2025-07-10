@@ -19,7 +19,7 @@ parser = add_rllib_example_script_args(
 )
 parser.set_defaults(
     enable_new_api_stack=True,
-    num_env_runners=1,
+    num_env_runners=2,
 )
 parser.add_argument(
     "--port",
