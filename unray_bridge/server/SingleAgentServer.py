@@ -115,7 +115,7 @@ if __name__ == "__main__":
         .get_default_config()
         .environment(
             observation_space=gym.spaces.Box(-1.0, 1.0, (4,), np.float32),
-            action_space=gym.spaces.Discrete(2),
+            action_space=gym.spaces.Discrete(4),
             # EnvRunners listen on `port` + their worker index.
             env_config={"port": args.port},
 
