@@ -18,7 +18,7 @@ from ray.rllib.algorithms.ppo.ppo_torch_policy import PPOTorchPolicy # Or the po
 
 
 parser = add_rllib_example_script_args(
-    default_reward=450.0, default_iters=200, default_timesteps=2000000
+    default_reward=1.0, default_iters=200, default_timesteps=2000000
 )
 parser.set_defaults(
     enable_new_api_stack=True,
@@ -62,7 +62,7 @@ if __name__ == "__main__":
         )
         .env_runners(
             env_runner_cls=TcpClientMultiAgentEnvRunner,
-            rollout_fragment_length=400,
+            rollout_fragment_length=2000,
         )
         .training(
             num_epochs=10,
@@ -71,13 +71,13 @@ if __name__ == "__main__":
         .multi_agent(
             policies={
                 policy_ids[0]: (
-                None, gym.spaces.Box(low=1.0, high=1, shape=(6,)), gym.spaces.Box(0, 3.0, (1,), dtype=np.float32), {}),
+                None, gym.spaces.Box(low=1.0, high=1, shape=(6,)), gym.spaces.Discrete(3), {}),
                 policy_ids[1]: (
                 None, gym.spaces.Box(low=1.0, high=1, shape=(8,)), gym.spaces.Box(0, 1.0, shape=(2,), dtype=np.float32), {}),
                 policy_ids[2]: (
                 None, gym.spaces.Box(0, 1, (1,), dtype=np.float32), gym.spaces.MultiDiscrete([2,2], dtype=np.int32), {}),
                 policy_ids[3]: (
-                None, gym.spaces.Box(low=1.0, high=1, shape=(7,)), gym.spaces.Box(low=0, high=1, shape=(2,)), {})
+                None, gym.spaces.Box(low=1.0, high=1, shape=(7,)), gym.spaces.Discrete(3), {})
             },
             policy_mapping_fn=policy_mapping_fn,
             policies_to_train=["policy_1","policy_2", "policy_3", "policy_4"],

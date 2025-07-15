@@ -70,7 +70,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port",
         type=int,
-        default=5555,
+        default=5556,
         help="Port to connect to the RLlib server. Should match server port + runner index.",
     )
     args = parser.parse_args()

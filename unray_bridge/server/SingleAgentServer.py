@@ -65,24 +65,29 @@ import threading
 
 import gymnasium as gym
 import numpy as np
+import ray
 
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
-from ray.rllib.env.tcp_client_inference_env_runner import (
-    _dummy_client,
-    TcpClientInferenceEnvRunner,
-)
+from ray.rllib.env.tcp_client_inference_env_runner import TcpClientInferenceEnvRunner
+
 from ray.rllib.utils.test_utils import (
     add_rllib_example_script_args,
     run_rllib_example_script_experiment,
 )
 from ray.tune.registry import get_trainable_cls
 
+from unray_bridge.server.custom_tcp_client_inference_env_runner import CustomTcpClientInferenceEnvRunner
+
+
+import os
+os.environ["RAY_DEDUP_LOGS"] = "0"
+
 parser = add_rllib_example_script_args(
     default_reward=450.0, default_iters=200, default_timesteps=2000000
 )
 parser.set_defaults(
     enable_new_api_stack=True,
-    num_env_runners=5,
+    num_env_runners=1,
 )
 parser.add_argument(
     "--port",
@@ -115,7 +120,7 @@ if __name__ == "__main__":
         .get_default_config()
         .environment(
             observation_space=gym.spaces.Box(-1.0, 1.0, (4,), np.float32),
-            action_space=gym.spaces.Discrete(4),
+            action_space=gym.spaces.Discrete(2),
             # EnvRunners listen on `port` + their worker index.
             env_config={"port": args.port},
 
@@ -124,13 +129,19 @@ if __name__ == "__main__":
         .env_runners(
             # Point RLlib to the custom EnvRunner to be used here.
             env_runner_cls=TcpClientInferenceEnvRunner,
-            rollout_fragment_length= 400
+            rollout_fragment_length= 400,
         )
         .training(
             num_epochs=10,
             vf_loss_coeff=0.01,
+
         )
         .rl_module(model_config=DefaultModelConfig(vf_share_layers=True))
+        #.learners(num_learners=0, num_gpus_per_learner=1)
     )
 
+    ray.init(
+        include_dashboard=True,
+        dashboard_port=8265,  # Puedes cambiarlo si el puerto está en uso
+    )
     run_rllib_example_script_experiment(base_config, args)

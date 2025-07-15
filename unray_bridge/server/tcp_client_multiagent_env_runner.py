@@ -265,6 +265,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
                     rllink.EPISODES,
                     rllink.EPISODES_AND_GET_STATE,
                 ]:
+                    print(msg_body)
                     self._process_episodes_message(msg_type, msg_body)
 
                 # Client requests the state (model weights).
@@ -320,15 +321,14 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
                     "actions": data[Columns.ACTIONS],
                     "rewards": data[Columns.REWARDS],
                     "extra_model_outputs": {
-                        Columns.ACTION_DIST_INPUTS: [np.array(logits) for logits in data[Columns.ACTION_DIST_INPUTS]],
-                        Columns.ACTION_LOGP: data[Columns.ACTION_LOGP],
+                        Columns.ACTION_DIST_INPUTS: [np.array(logits) for logits in data["extra_model_outputs"][Columns.ACTION_DIST_INPUTS]],
+                        Columns.ACTION_LOGP: data["extra_model_outputs"][Columns.ACTION_LOGP],
                     },
                     "terminated": data["is_terminated"],
                     "truncated": data["is_truncated"],
                 }
 
             episode = MultiAgentEpisode(
-                agent_data=agents_data,
                 observation_space_dict=self.config.observation_space,
                 action_space_dict=self.config.action_space,
                 len_lookback_buffer=0,

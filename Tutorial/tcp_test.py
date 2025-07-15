@@ -43,6 +43,7 @@ from ray.rllib.utils.typing import EpisodeID, StateDict
 from sympy.codegen import Print
 
 torch, _ = try_import_torch()
+import traceback
 
 
 @ExperimentalAPI
@@ -76,6 +77,7 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
         """
         super().__init__(config=config)
 
+
         self.worker_index: int = kwargs.get("worker_index", 0)
 
         self._weights_seq_no = 0
@@ -92,9 +94,10 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
         self.client_socket = None
         self.address = None
 
+
         self.metrics = MetricsLogger()
 
-        self._episode_chunks_to_return: Optional[List[SingleAgentEpisode]] = None
+        self._episode_chunks_to_return: List[SingleAgentEpisode] = []
         self._done_episodes_for_metrics: List[SingleAgentEpisode] = []
         self._ongoing_episodes_for_metrics: DefaultDict[
             EpisodeID, List[SingleAgentEpisode]
@@ -120,9 +123,16 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
     @override(EnvRunner)
     def sample(self, **kwargs):
         """Waits for the client to send episodes."""
+
         while True:
             with self._sample_lock:
-                if self._episode_chunks_to_return is not None:
+                #print("Sample called: ", self._episode_chunks_to_return)
+                #print("SELF ID:", id(self))
+
+                if len(self._episode_chunks_to_return) > 0:
+
+                    print("Sample called: ", self._episode_chunks_to_return)
+
                     num_env_steps = 0
                     num_episodes_completed = 0
                     for eps in self._episode_chunks_to_return:
@@ -134,7 +144,7 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
                         num_env_steps += len(eps)
 
                     ret = self._episode_chunks_to_return
-                    self._episode_chunks_to_return = None
+                    self._episode_chunks_to_return = []
 
                     SingleAgentEnvRunner._increase_sampled_metrics(
                         self, num_env_steps, num_episodes_completed
@@ -213,6 +223,8 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
     def set_state(self, state: StateDict) -> None:
         print("set state called ...")
         # Update the RLModule state.
+
+        #print("state: ", state)
         if COMPONENT_RL_MODULE in state:
             # A missing value for WEIGHTS_SEQ_NO or a value of 0 means: Force the
             # update.
@@ -220,6 +232,8 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
 
             # Only update the weigths, if this is the first synchronization or
             # if the weights of this `EnvRunner` lacks behind the actual ones.
+            print("set weights sequence no", weights_seq_no)
+            print("self set weights sequence no", self._weights_seq_no)
             if weights_seq_no == 0 or self._weights_seq_no < weights_seq_no:
                 rl_module_state = state[COMPONENT_RL_MODULE]
                 if (
@@ -233,6 +247,7 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
             if weights_seq_no > 0:
                 self._weights_seq_no = weights_seq_no
 
+        print("blocked : ", self._blocked_on_state)
         if self._blocked_on_state is True:
             self._send_set_state_message()
             self._blocked_on_state = False
@@ -315,8 +330,10 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
         # On-policy training -> we have to block until we get a new `set_state` call
         # (b/c the learning step is done and we can sent new weights back to all
         # clients).
+        print(f"Processing episodes message: {msg_type} ")
         if msg_type == rllink.EPISODES_AND_GET_STATE:
             self._blocked_on_state = True
+            print("blocked on state: ", self._blocked_on_state)
 
         episodes = []
         for episode_data in msg_body["episodes"]:
@@ -340,10 +357,16 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
 
         # Push episodes into the to-be-returned list (for `sample()` requests).
         with self._sample_lock:
-            if isinstance(self._episode_chunks_to_return, list):
-                self._episode_chunks_to_return.extend(episodes)
-            else:
-                self._episode_chunks_to_return = episodes
+
+            #if isinstance(self._episode_chunks_to_return, list):
+            self._episode_chunks_to_return.extend(episodes)
+            print("Episode chunks list: ", self._episode_chunks_to_return)
+
+            #else:
+
+            #    self._episode_chunks_to_return = episodes
+            #    print("Episode chunks: ", self._episode_chunks_to_return)
+            #    print("SELF ID 2:", id(self))
 
     def _send_set_state_message(self):
         with tempfile.TemporaryDirectory() as dir:
@@ -366,7 +389,7 @@ class TcpClientInferenceEnvRunner(EnvRunner, Checkpointable):
             {
                 "type": rllink.SET_STATE.name,
                 "onnx_file": onnx_binary,
-                WEIGHTS_SEQ_NO: self._weights_seq_no,
+                WEIGHTS_SEQ_NO: self._weights_seq_no+1,
             },
         )
 
@@ -413,7 +436,7 @@ def _send_message(sock_, message: dict):
     try:
         sock_.sendall(header + body)
         #print("Sending message..")
-        print("type:", message["type"])
+        print("sent:", message["type"])
         #print("Body:", body)
         #print("Full Message (hex):", (header + body).hex(' ', 1))  # Byte por byte en hex
         #print("As UTF-8 string:", (header + body).decode('utf-8', errors='replace'))
@@ -518,7 +541,7 @@ def _dummy_client(port: int = 5556):
     env = gym.make("CartPole-v1")
     obs, info = env.reset()
     observations.append(obs.tolist())
-
+    w_seq = 1
     while True:
         timesteps += 1
         # Perform action inference using the ONNX model.
@@ -545,7 +568,7 @@ def _dummy_client(port: int = 5556):
         rewards.append(reward)
         episode_return += reward
 
-        print(f"episode_return: {episode_return}")
+        #print(f"episode_return: {episode_return}")
 
         # We have to create a new episode record.
         if timesteps == env_steps_per_sample or terminated or truncated:
@@ -574,14 +597,26 @@ def _dummy_client(port: int = 5556):
                             "type": rllink.EPISODES_AND_GET_STATE.name,
                             "episodes": episodes,
                             "timesteps": timesteps,
+                            "weights_seq_no": w_seq + 1
                         },
                     )
+
                     # We are forced to sample on-policy. Have to wait for a response
                     # with the state (weights) in it.
                     print("Wait for response...")
+
+                    """_send_message(
+                        sock_,
+                        {
+                            "type": rllink.GET_STATE_.name,
+                        }
+                    )"""
                     msg_type, msg_body = _get_message(sock_)
+                    print("msg type: ", msg_type)
                     assert msg_type == rllink.SET_STATE
                     onnx_session, output_names = _set_state(msg_body)
+                    onnx_msg = msg_body["onnx_file"]
+                    print(f"onnx: {onnx_msg}")
 
                 # Sampling doesn't have to be on-policy -> continue collecting
                 # samples.
@@ -600,7 +635,7 @@ def _dummy_client(port: int = 5556):
 
             # The episode is done -> Reset.
             if terminated or truncated:
-                print("Reset")
+                #print("Reset")
                 obs, _ = env.reset()
                 observations = [obs.tolist()]
                 episode_return = 0.0
