@@ -57,6 +57,9 @@ class CustomTcpClientInferenceEnvRunner(TcpClientInferenceEnvRunner):
         if msg_type == rllink.EPISODES_AND_GET_STATE:
             self._blocked_on_state = True
 
+        print("msg type: ", msg_type)
+        print("msg body: ", msg_body)
+
         episodes = []
         for episode_data in msg_body["episodes"]:
             default_data = episode_data["agents"]["default"]

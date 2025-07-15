@@ -64,15 +64,27 @@ ConnectionError: Error receiving message from peer on socket ...
 
 import argparse
 from ray.rllib.env.tcp_client_inference_env_runner import _dummy_client
+from ray.rllib.utils.test_utils import (
+    add_rllib_example_script_args,
+    run_rllib_example_script_experiment,
+)
+
+parser = add_rllib_example_script_args(
+    default_reward=450.0, default_iters=200, default_timesteps=2000000
+)
+parser.set_defaults(
+    enable_new_api_stack=True,
+    num_env_runners=1,
+)
+parser.add_argument(
+    "--port",
+    type=int,
+    default=5555,
+    help="The port for RLlib's EnvRunner to listen to for incoming UE5 connections. "
+    "You need to specify the same port inside your UE5 `RLlibClient` plugin.",
+)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Dummy CartPole client for RLlib TCP server.")
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=5556,
-        help="Port to connect to the RLlib server. Should match server port + runner index.",
-    )
     args = parser.parse_args()
 
-    _dummy_client(port=args.port)
+    _dummy_client(port=args.port+ (args.num_env_runners if args.num_env_runners is not None else 1))

@@ -101,19 +101,6 @@ parser.add_argument(
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    """ 
-    # Start the dummy CartPole client in a thread (and do its thing in parallel).
-    client_thread = threading.Thread(
-        target=partial(
-            _dummy_client,
-            port=args.port
-            #+ (args.num_env_runners if args.num_env_runners is not None else 1),
-        ),
-    )
-    client_thread.start()
- 
-    """
-
     # Define the RLlib (server) config.
     base_config = (
         get_trainable_cls(args.algo)
@@ -128,12 +115,14 @@ if __name__ == "__main__":
         )
         .env_runners(
             # Point RLlib to the custom EnvRunner to be used here.
-            env_runner_cls=TcpClientInferenceEnvRunner,
-            rollout_fragment_length= 400,
+            env_runner_cls=CustomTcpClientInferenceEnvRunner,
+            rollout_fragment_length= 1800,
+
         )
         .training(
             num_epochs=10,
             vf_loss_coeff=0.01,
+            train_batch_size=1800,
 
         )
         .rl_module(model_config=DefaultModelConfig(vf_share_layers=True))
