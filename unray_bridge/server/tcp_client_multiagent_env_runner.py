@@ -83,7 +83,12 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
 
         self.worker_index: int = kwargs.get("worker_index", 0)
 
-        self._weights_seq_no = 0
+        self._weights_seq_by_agent_no = {
+            "policy_1": 0,
+            "policy_2": 0,
+            "policy_3": 0,
+            "policy_4": 0,
+        }
 
         # Build the module from its spec.
         module_spec = self.config.get_multi_rl_module_spec(
@@ -107,7 +112,12 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
 
         self._sample_lock = threading.Lock()
         self._on_policy_lock = threading.Lock()
-        self._blocked_on_state = False
+        self._blocked_on_state_by_agent = {
+            "policy_1": False,
+            "policy_2": False,
+            "policy_3": False,
+            "policy_4": False
+        }
 
         # Start a background thread for client communication.
         self.thread = threading.Thread(
@@ -256,27 +266,36 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             # A missing value for WEIGHTS_SEQ_NO or a value of 0 means: Force the
             # update.
             weights_seq_no = state.get(WEIGHTS_SEQ_NO, 0)
-
+            print("w_seq: ",weights_seq_no)
             # Only update the weigths, if this is the first synchronization or
             # if the weights of this `EnvRunner` lacks behind the actual ones.
-            if weights_seq_no == 0 or self._weights_seq_no < weights_seq_no:
-                rl_module_state = state[COMPONENT_RL_MODULE]
-                if isinstance(rl_module_state, dict):
-                    for policy_id, policy_state in rl_module_state.items():
+
+
+            rl_module_state = state[COMPONENT_RL_MODULE]
+            if isinstance(rl_module_state, dict):
+
+                for policy_id, policy_state in rl_module_state.items():
+                    print("policy_id: ",policy_id)
+
+                    if weights_seq_no == 0 or self._weights_seq_by_agent_no[policy_id] < weights_seq_no:
                         if policy_id not in self.module:
                             raise ValueError(f"Policy {policy_id} not found in module.")
                         self.module[policy_id].set_state(policy_state)
-                else:
-                    raise ValueError("Expected multi-policy state dictionary.")
+                        # Update our weights_seq_no, if the new one is > 0.
+                        if weights_seq_no > 0:
+                            self._weights_seq_by_agent_no[policy_id] = weights_seq_no
 
-            # Update our weights_seq_no, if the new one is > 0.
-            if weights_seq_no > 0:
-                self._weights_seq_no = weights_seq_no
+                        print("w_seq - ", policy_id, ": ", self._weights_seq_by_agent_no[policy_id])
 
-        if self._blocked_on_state is True:
-            print("Blocked on state", self._blocked_on_state)
-            self._send_set_state_message()
-            self._blocked_on_state = False
+                    if self._blocked_on_state_by_agent[policy_id] is True:
+                        print("Blocked on state - ", policy_id, ": ", self._blocked_on_state_by_agent[policy_id])
+                        self._send_set_state_message(policy_id, only_get_state = False)
+                        self._blocked_on_state_by_agent[policy_id] = False
+            else:
+                raise ValueError("Expected multi-policy state dictionary.")
+
+
+
 
     def _client_message_listener(self):
         """Entry point for the listener thread."""
@@ -289,9 +308,9 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             # As long as we are blocked on a new state, sleep a bit and continue.
             # Do NOT process any incoming messages (until we send out the new state
             # back to the client).
-            if self._blocked_on_state is True:
-                time.sleep(0.01)
-                continue
+            #if all(self._blocked_on_state_by_agent.values()):
+            #    time.sleep(0.01)
+            #    continue
 
             try:
                 # Blocking call to get next message.
@@ -312,7 +331,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
 
                 # Client requests the state (model weights).
                 elif msg_type == rllink.GET_STATE:
-                    self._send_set_state_message()
+                    self._send_set_state_message([], only_get_state=True)
 
                 # Clients requests some (relevant) config information.
                 elif msg_type == rllink.GET_CONFIG:
@@ -350,12 +369,11 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
     def _send_pong_message(self):
         _send_message(self.client_socket, {"type": rllink.PONG.name})
 
-    from typing import Dict, List, Any
-
-
     def _process_episodes_message(self, msg_type, msg_body):
-        if msg_type == rllink.EPISODES_AND_GET_STATE:
-            self._blocked_on_state = True
+        agent_ids = list(msg_body["episodes"][0]["agents"].keys())
+        for agent in agent_ids:
+            if msg_type == rllink.EPISODES_AND_GET_STATE:
+                self._blocked_on_state_by_agent[agent] = True
 
         episodes = []
 
@@ -504,24 +522,28 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             "action": act_space
         }
 
-    def get_rl_module_spec_for_module(self, module_id, spaces, inference_only=False):
-        # Usa la clase del módulo base desde el config
-        module_class = self.module.__class__
+    """    def get_rl_module_spec_for_module(self, module_id, spaces, inference_only=False):
+            # Usa la clase del módulo base desde el config
+            module_class = self.module.__class__
+    
+            return RLModuleSpec(
+                module_class=module_class,
+                observation_space=spaces["obs"],
+                action_space=spaces["action"],
+                model_config=self.config.model,
+                catalog_class=self.config.get("catalog_class", None),
+                inference_only=inference_only,
+            )
+    """
 
-        return RLModuleSpec(
-            module_class=module_class,
-            observation_space=spaces["obs"],
-            action_space=spaces["action"],
-            model_config=self.config.model,
-            catalog_class=self.config.get("catalog_class", None),
-            inference_only=inference_only,
-        )
-
-
-    def _send_set_state_message(self):
+    def _send_set_state_message(self, policy_ids, only_get_state):
         onnx_models = {}
 
         for module_id in self.get_multi_agent_module_ids():
+
+            if module_id not in policy_ids and not only_get_state:
+                continue
+
             spaces = self.get_spaces_for_module(module_id)
             obs_space = spaces["obs"]
 
@@ -548,7 +570,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             {
                 "type": rllink.SET_STATE.name,
                 "onnx_files": onnx_models,
-                WEIGHTS_SEQ_NO: self._weights_seq_no,
+                WEIGHTS_SEQ_NO: str(self._weights_seq_by_agent_no),
             },
         )
 
