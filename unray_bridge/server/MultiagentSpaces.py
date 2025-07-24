@@ -22,7 +22,7 @@ parser = add_rllib_example_script_args(
 )
 parser.set_defaults(
     enable_new_api_stack=True,
-    num_env_runners=2,
+    num_env_runners=1,
 )
 parser.add_argument(
     "--port",
@@ -36,8 +36,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Definir espacios comunes
-    obs_space = gym.spaces.Box(1.0, 1.0, (4,), dtype=np.float32)
-    act_space = gym.spaces.MultiDiscrete([2,2,2], dtype=np.int32)
+    obs_space = {
+        "agent_1": gym.spaces.Box(low=1.0, high=1, shape=(6,), dtype=np.float32),
+        "agent_2": gym.spaces.Box(low=1.0, high=1, shape=(8,), dtype=np.float32),
+        "agent_3": gym.spaces.Box(0, 1, (1,), dtype=np.float32),
+        "agent_4": gym.spaces.Box(low=1.0, high=1, shape=(7,), dtype=np.float32)
+    }
+    act_space = {
+        "agent_1": gym.spaces.Discrete(3),
+        "agent_2": gym.spaces.Box(0, 1.0, shape=(2,), dtype=np.float32),
+        "agent_3": gym.spaces.MultiDiscrete([2,2], dtype=np.int32),
+        "agent_4": gym.spaces.Discrete(3)
+    }
     # Políticas
     policy_ids = ["policy_1", "policy_2", "policy_3", "policy_4"]
 
@@ -62,11 +72,12 @@ if __name__ == "__main__":
         )
         .env_runners(
             env_runner_cls=TcpClientMultiAgentEnvRunner,
-            rollout_fragment_length=2000,
+            rollout_fragment_length="auto",
         )
         .training(
             num_epochs=10,
             vf_loss_coeff=0.01,
+            train_batch_size=1000,
         )
         .multi_agent(
             policies={

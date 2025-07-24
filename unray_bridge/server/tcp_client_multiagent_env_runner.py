@@ -1,4 +1,5 @@
 import base64
+import math
 from collections import defaultdict
 import gzip
 import json
@@ -7,11 +8,12 @@ import socket
 import tempfile
 import threading
 import time
-from typing import Collection, DefaultDict, List, Optional, Union
+from typing import Collection, DefaultDict, List, Optional, Union, Dict, Any
 
 import gymnasium as gym
 import numpy as np
 import onnxruntime
+from gymnasium.spaces import MultiDiscrete, Box, Discrete
 
 from ray.rllib.core import (
     Columns,
@@ -40,7 +42,8 @@ from ray.rllib.utils.metrics import (
 )
 from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 from ray.rllib.utils.numpy import softmax
-from ray.rllib.utils.typing import EpisodeID, StateDict
+from ray.rllib.utils.postprocessing import episodes
+from ray.rllib.utils.typing import EpisodeID, ModelWeights, ResultDict, StateDict
 from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
 from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
 
@@ -64,7 +67,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
     is responsible for generating all the data to create episodes.
     """
 
-    @override(MultiAgentEnvRunner)
+    @override(EnvRunner)
     def __init__(self, *, config, **kwargs):
         """
         Initializes a TcpClientInferenceEnvRunner instance.
@@ -83,7 +86,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
         self._weights_seq_no = 0
 
         # Build the module from its spec.
-        module_spec = self.config.get_rl_module_spec(
+        module_spec = self.config.get_multi_rl_module_spec(
             spaces=self.get_spaces(), inference_only=True
         )
         self.module = module_spec.build()
@@ -112,14 +115,14 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
         )
         self.thread.start()
 
-    @override(MultiAgentEnvRunner)
+    @override(EnvRunner)
     def assert_healthy(self):
         """Checks that the server socket is open and listening."""
         assert (
             self.server_socket is not None
         ), "Server socket is None (not connected, not listening)."
 
-    @override(MultiAgentEnvRunner)
+    @override(EnvRunner)
     def sample(self, **kwargs):
         while True:
             with self._sample_lock:
@@ -132,38 +135,72 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
                             num_episodes_completed += 1
                         else:
                             self._ongoing_episodes_for_metrics[eps.id_].append(eps)
-                        num_env_steps += eps.total_agent_steps()
+                        num_env_steps += len(eps)
 
                     ret = self._episode_chunks_to_return
                     self._episode_chunks_to_return = None
 
-                    MultiAgentEnvRunner._increase_sampled_metrics(
-                        self, num_env_steps, num_episodes_completed
-                    )
+                    if ret:
+                        sample_episode = ret[0]
+                        sample_obs = sample_episode.get_observations(indices=[-1], return_list=True)[0]
+                        MultiAgentEnvRunner._increase_sampled_metrics(
+                            self, num_env_steps, sample_obs, sample_episode
+                        )
+
                     return ret
             time.sleep(0.01)
 
-    @override(MultiAgentEnvRunner)
-    def get_metrics(self):
-        # TODO (sven): We should probably make this a utility function to be called
-        #  from within Single/MultiAgentEnvRunner and other EnvRunner subclasses, as
-        #  needed.
+    @override(EnvRunner)
+    def get_metrics(self) -> ResultDict:
         # Compute per-episode metrics (only on already completed episodes).
         for eps in self._done_episodes_for_metrics:
             assert eps.is_done
             episode_length = len(eps)
+            agent_steps = defaultdict(
+                int,
+                {str(aid): len(sa_eps) for aid, sa_eps in eps.agent_episodes.items()},
+            )
             episode_return = eps.get_return()
             episode_duration_s = eps.get_duration_s()
+
+            agent_episode_returns = defaultdict(
+                float,
+                {
+                    str(sa_eps.agent_id): sa_eps.get_return()
+                    for sa_eps in eps.agent_episodes.values()
+                },
+            )
+            module_episode_returns = defaultdict(
+                float,
+                {
+                    sa_eps.module_id: sa_eps.get_return()
+                    for sa_eps in eps.agent_episodes.values()
+                },
+            )
+
             # Don't forget about the already returned chunks of this episode.
             if eps.id_ in self._ongoing_episodes_for_metrics:
                 for eps2 in self._ongoing_episodes_for_metrics[eps.id_]:
+                    return_eps2 = eps2.get_return()
                     episode_length += len(eps2)
-                    episode_return += eps2.get_return()
+                    episode_return += return_eps2
                     episode_duration_s += eps2.get_duration_s()
+
+                    for sa_eps in eps2.agent_episodes.values():
+                        return_sa = sa_eps.get_return()
+                        agent_steps[str(sa_eps.agent_id)] += len(sa_eps)
+                        agent_episode_returns[str(sa_eps.agent_id)] += return_sa
+                        module_episode_returns[sa_eps.module_id] += return_sa
+
                 del self._ongoing_episodes_for_metrics[eps.id_]
 
             self._log_episode_metrics(
-                episode_length, episode_return, episode_duration_s
+                episode_length,
+                episode_return,
+                episode_duration_s,
+                agent_episode_returns,
+                module_episode_returns,
+                dict(agent_steps),
             )
 
         # Now that we have logged everything, clear cache of done episodes.
@@ -175,10 +212,10 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
     def get_spaces(self):
         return {
             INPUT_ENV_SPACES: (self.config.observation_space, self.config.action_space),
-            DEFAULT_MODULE_ID: (
-                self.config.observation_space,
-                self.config.action_space,
-            ),
+            **{
+                mid: (o, self.config.action_space[mid])
+                for mid, o in self.config.observation_space.items()
+            },
         }
 
     @override(MultiAgentEnvRunner)
@@ -212,6 +249,9 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
     @override(Checkpointable)
     def set_state(self, state: StateDict) -> None:
         # Update the RLModule state.
+
+        #print ("State ", state)
+
         if COMPONENT_RL_MODULE in state:
             # A missing value for WEIGHTS_SEQ_NO or a value of 0 means: Force the
             # update.
@@ -221,18 +261,20 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             # if the weights of this `EnvRunner` lacks behind the actual ones.
             if weights_seq_no == 0 or self._weights_seq_no < weights_seq_no:
                 rl_module_state = state[COMPONENT_RL_MODULE]
-                if (
-                    isinstance(rl_module_state, dict)
-                    and DEFAULT_MODULE_ID in rl_module_state
-                ):
-                    rl_module_state = rl_module_state[DEFAULT_MODULE_ID]
-                self.module.set_state(rl_module_state)
+                if isinstance(rl_module_state, dict):
+                    for policy_id, policy_state in rl_module_state.items():
+                        if policy_id not in self.module:
+                            raise ValueError(f"Policy {policy_id} not found in module.")
+                        self.module[policy_id].set_state(policy_state)
+                else:
+                    raise ValueError("Expected multi-policy state dictionary.")
 
             # Update our weights_seq_no, if the new one is > 0.
             if weights_seq_no > 0:
                 self._weights_seq_no = weights_seq_no
 
         if self._blocked_on_state is True:
+            print("Blocked on state", self._blocked_on_state)
             self._send_set_state_message()
             self._blocked_on_state = False
 
@@ -265,7 +307,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
                     rllink.EPISODES,
                     rllink.EPISODES_AND_GET_STATE,
                 ]:
-                    print(msg_body)
+                    #print(msg_body)
                     self._process_episodes_message(msg_type, msg_body)
 
                 # Client requests the state (model weights).
@@ -308,32 +350,137 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
     def _send_pong_message(self):
         _send_message(self.client_socket, {"type": rllink.PONG.name})
 
+    from typing import Dict, List, Any
+
+
     def _process_episodes_message(self, msg_type, msg_body):
         if msg_type == rllink.EPISODES_AND_GET_STATE:
             self._blocked_on_state = True
 
         episodes = []
-        for episode_data in msg_body["episodes"]:
-            agents_data = {}
-            for agent_id, data in episode_data["agents"].items():
-                agents_data[agent_id] = {
-                    "observations": [np.array(o) for o in data[Columns.OBS]],
-                    "actions": data[Columns.ACTIONS],
-                    "rewards": data[Columns.REWARDS],
-                    "extra_model_outputs": {
-                        Columns.ACTION_DIST_INPUTS: [np.array(logits) for logits in data["extra_model_outputs"][Columns.ACTION_DIST_INPUTS]],
-                        Columns.ACTION_LOGP: data["extra_model_outputs"][Columns.ACTION_LOGP],
-                    },
-                    "terminated": data["is_terminated"],
-                    "truncated": data["is_truncated"],
-                }
 
+        for episode_data in msg_body["episodes"]:
+
+            timesteps = len(next(iter(episode_data["agents"].values()))["actions"])  # asumimos longitud uniforme
+            observations = [
+                {
+                    agent_id: np.asarray(agent_data["obs"][t], dtype=np.float32)
+                    for agent_id, agent_data in episode_data["agents"].items()
+                }
+                for t in range(timesteps + 1)
+            ]
+
+            actions = [
+                {
+                    agent_id: np.asarray(agent_data["actions"][t], dtype=np.float32)
+                    for agent_id, agent_data in episode_data["agents"].items()
+                }
+                for t in range(timesteps)
+            ]
+
+            rewards = [
+                {
+                    agent_id: np.asarray(agent_data["rewards"][t], dtype=np.float32)
+                    for agent_id, agent_data in episode_data["agents"].items()
+                }
+                for t in range(timesteps)
+            ]
+
+            extra_model_outputs = []
+
+            for t in range(timesteps):
+                timestep_dict = {}
+                for agent_id, agent_data in episode_data["agents"].items():
+                    timestep_dict[agent_id] = {
+                        "action_dist_inputs": np.asarray(agent_data["extra_model_outputs"]["action_dist_inputs"][t],
+                                                         dtype=np.float32),
+                        "action_logp": np.asarray(agent_data["extra_model_outputs"]["action_logp"][t],
+                                                  dtype=np.float32),
+                    }
+                extra_model_outputs.append(timestep_dict)
+
+            act_space = {
+                "policy_1": gym.spaces.Discrete(3),
+                "policy_2": gym.spaces.Box(0, 1.0, shape=(2,), dtype=np.float32),
+                "policy_3": gym.spaces.MultiDiscrete([2, 2], dtype=np.int32),
+                "policy_4": gym.spaces.Discrete(3)
+            }
+
+            extra_model_outputs = []
+
+            for t in range(timesteps):
+                timestep_dict = {}
+                for agent_id, agent_data in episode_data["agents"].items():
+                    space = act_space[agent_id]
+                    logits = agent_data["extra_model_outputs"]["action_dist_inputs"][t]
+                    logp = agent_data["extra_model_outputs"]["action_logp"][t]
+
+                    # Valida dimensiones
+                    logits = np.asarray(logits, dtype=np.float32)
+                    logp = np.asarray(logp, dtype=np.float32)
+
+                    if isinstance(space, Discrete):
+                        assert logits.shape == (
+                            space.n,), f"{agent_id}: expected shape {(space.n,)}, got {logits.shape}"
+                    elif isinstance(space, Box):
+                        expected = 2 * space.shape[0]
+                        assert logits.shape == (
+                            expected,), f"{agent_id}: expected shape {(expected,)}, got {logits.shape}"
+                    elif isinstance(space, MultiDiscrete):
+                        expected = np.sum(space.nvec)
+                        assert logits.shape == (
+                            expected,), f"{agent_id}: expected shape {(expected,)}, got {logits.shape}"
+                    else:
+                        raise ValueError(f"Unsupported action space for agent {agent_id}")
+
+                    timestep_dict[agent_id] = {
+                        "action_dist_inputs": logits,
+                        "action_logp": logp,
+                    }
+
+                extra_model_outputs.append(timestep_dict)
+            # Construir diccionarios finales de terminación y truncamiento
+            terminateds = {
+                agent_id: data.get("is_terminated", False)
+                for agent_id, data in episode_data.items()
+            }
+            terminateds["__all__"] = all(terminateds.values())
+
+            truncateds = {
+                agent_id: data.get("is_truncated", False)
+                for agent_id, data in episode_data.items()
+            }
+            truncateds["__all__"] = all(truncateds.values())
+
+            POLICY_BY_AGENT = {
+                "policy_1": "policy_1",
+                "policy_2": "policy_2",
+                "policy_3": "policy_3",
+                "policy_4": "policy_4",
+            }
+            agents_data = episode_data["agents"]
+
+            module_ids = {
+                agent_id: POLICY_BY_AGENT[agent_id]  # o policy_mapping_fn(agent_id)
+                for agent_id in agents_data.keys()
+            }
+
+
+            # Crear el MultiAgentEpisode
             episode = MultiAgentEpisode(
-                observation_space_dict=self.config.observation_space,
-                action_space_dict=self.config.action_space,
+                observation_space=self.config.observation_space,
+                action_space=self.config.action_space,
+                observations=observations,
+                actions=actions,
+                rewards=rewards,
+                extra_model_outputs=extra_model_outputs,
+                terminateds=terminateds,
+                truncateds=truncateds,
                 len_lookback_buffer=0,
+                agent_module_ids=module_ids,
             )
-            episodes.append(episode.to_numpy())
+
+            episodes.append(episode)
 
         with self._sample_lock:
             if isinstance(self._episode_chunks_to_return, list):
@@ -378,24 +525,13 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             spaces = self.get_spaces_for_module(module_id)
             obs_space = spaces["obs"]
 
-            # Crear spec e instanciar módulo para el agente
-            module_spec = self.get_rl_module_spec_for_module(
-                module_id=module_id,
-                spaces={
-                    "obs": obs_space,
-                    "action": spaces["action"]
-                },
-                inference_only=True
-            )
-            module = module_spec.build()
-
             # Exportar a ONNX
             with tempfile.TemporaryDirectory() as dir:
                 onnx_file = pathlib.Path(dir) / f"{module_id}_model.onnx"
                 dummy_obs = torch.randn(1, *obs_space.shape)
 
                 torch.onnx.export(
-                    module,
+                    self.module[module_id],
                     {"batch": {"obs": dummy_obs}},
                     onnx_file,
                     export_params=True,
@@ -428,28 +564,66 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             },
         )
 
-    def _log_episode_metrics(self, length, ret, sec):
+    def _log_episode_metrics(
+        self,
+        length,
+        ret,
+        sec,
+        agents=None,
+        modules=None,
+        agent_steps=None,
+    ):
         # Log general episode metrics.
-        # To mimic the old API stack behavior, we'll use `window` here for
-        # these particular stats (instead of the default EMA).
-        win = self.config.metrics_num_episodes_for_smoothing
-        self.metrics.log_value(EPISODE_LEN_MEAN, length, window=win)
-        self.metrics.log_value(EPISODE_RETURN_MEAN, ret, window=win)
-        self.metrics.log_value(EPISODE_DURATION_SEC_MEAN, sec, window=win)
-        # Per-agent returns.
-        self.metrics.log_value(
-            ("agent_episode_returns_mean", DEFAULT_AGENT_ID), ret, window=win
-        )
-        # Per-RLModule returns.
-        self.metrics.log_value(
-            ("module_episode_returns_mean", DEFAULT_MODULE_ID), ret, window=win
+
+        # Use the configured window, but factor in the parallelism of the EnvRunners.
+        # As a result, we only log the last `window / num_env_runners` steps here,
+        # b/c everything gets parallel-merged in the Algorithm process.
+        win = max(
+            1,
+            int(
+                math.ceil(
+                    self.config.metrics_num_episodes_for_smoothing
+                    / (self.config.num_env_runners or 1)
+                )
+            ),
         )
 
+        self.metrics.log_dict(
+            {
+                EPISODE_LEN_MEAN: length,
+                EPISODE_RETURN_MEAN: ret,
+                EPISODE_DURATION_SEC_MEAN: sec,
+                **(
+                    {
+                        # Per-agent returns.
+                        "agent_episode_returns_mean": agents,
+                        # Per-RLModule returns.
+                        "module_episode_returns_mean": modules,
+                        "agent_steps": agent_steps,
+                    }
+                    if agents is not None
+                    else {}
+                ),
+            },
+            window=win,
+        )
         # For some metrics, log min/max as well.
-        self.metrics.log_value(EPISODE_LEN_MIN, length, reduce="min", window=win)
-        self.metrics.log_value(EPISODE_RETURN_MIN, ret, reduce="min", window=win)
-        self.metrics.log_value(EPISODE_LEN_MAX, length, reduce="max", window=win)
-        self.metrics.log_value(EPISODE_RETURN_MAX, ret, reduce="max", window=win)
+        self.metrics.log_dict(
+            {
+                EPISODE_LEN_MIN: length,
+                EPISODE_RETURN_MIN: ret,
+            },
+            reduce="min",
+            window=win,
+        )
+        self.metrics.log_dict(
+            {
+                EPISODE_LEN_MAX: length,
+                EPISODE_RETURN_MAX: ret,
+            },
+            reduce="max",
+            window=win,
+        )
 
 
 def _send_message(sock_, message: dict):
@@ -459,8 +633,8 @@ def _send_message(sock_, message: dict):
     try:
         sock_.sendall(header + body)
         print("Sending message..")
-        print("Header:", header)
-        #print("Body:", body)
+        #print("Header:", header)
+        print("Type:", message["type"])
         #print("Full Message (hex):", (header + body).hex(' ', 1))  # Byte por byte en hex
         #print("As UTF-8 string:", (header + body).decode('utf-8', errors='replace'))
     except Exception as e:

@@ -58,7 +58,8 @@ class CustomTcpClientInferenceEnvRunner(TcpClientInferenceEnvRunner):
             self._blocked_on_state = True
 
         print("msg type: ", msg_type)
-        print("msg body: ", msg_body)
+        #print("msg body: ", msg_body)
+        print("Blocked on state :: Process", self._blocked_on_state)
 
         episodes = []
         for episode_data in msg_body["episodes"]:
