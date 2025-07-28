@@ -52,15 +52,13 @@ if __name__ == "__main__":
     policy_ids = ["policy_1", "policy_2", "policy_3", "policy_4"]
 
     # Mapeo agentes → políticas
-    def policy_mapping_fn(agent_id: str, episode=None, **kwargs):
-        if agent_id == "agent_1":
-            return "policy_1"
-        elif agent_id == "agent_2":
-            return "policy_2"
-        elif agent_id == "agent_3":
-            return "policy_3"
-        elif agent_id == "agent_4":
-            return "policy_4"
+    def policy_mapping_fn(agent_id):
+        return {
+            "agent_1": "policy_1",
+            "agent_2": "policy_2",
+            "agent_3": "policy_3",
+            "agent_4": "policy_4"
+        }.get(agent_id)
 
     base_config = (
         get_trainable_cls(args.algo)

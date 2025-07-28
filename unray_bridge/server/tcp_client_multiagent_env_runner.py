@@ -83,12 +83,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
 
         self.worker_index: int = kwargs.get("worker_index", 0)
 
-        self._weights_seq_by_agent_no = {
-            "policy_1": 0,
-            "policy_2": 0,
-            "policy_3": 0,
-            "policy_4": 0,
-        }
+
 
         # Build the module from its spec.
         module_spec = self.config.get_multi_rl_module_spec(
@@ -112,12 +107,17 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
 
         self._sample_lock = threading.Lock()
         self._on_policy_lock = threading.Lock()
-        self._blocked_on_state_by_agent = {
-            "policy_1": False,
-            "policy_2": False,
-            "policy_3": False,
-            "policy_4": False
-        }
+
+        self.policy_mapping_fn = self.config.multi_agent().get("policy_mapping_fn", lambda agent_id: agent_id)
+
+        #for(agent in self.config.observation_space.keys):
+        agent_ids = list(self.config.observation_space)
+        self._blocked_on_state_by_agent = {agent_id: False for agent_id in agent_ids}
+        self._weights_seq_by_agent_no = {agent_id: 0 for agent_id in agent_ids}
+
+        self.reverse_agents_map = self.build_reverse_mapping(agent_ids, self.policy_mapping_fn)
+
+        #print("mapping: ", self._weights_seq_by_agent_no)
 
         # Start a background thread for client communication.
         self.thread = threading.Thread(
@@ -275,27 +275,36 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             if isinstance(rl_module_state, dict):
 
                 for policy_id, policy_state in rl_module_state.items():
-                    print("policy_id: ",policy_id)
+                    #print("policy_id: ",policy_id)
 
                     if weights_seq_no == 0 or self._weights_seq_by_agent_no[policy_id] < weights_seq_no:
                         if policy_id not in self.module:
                             raise ValueError(f"Policy {policy_id} not found in module.")
                         self.module[policy_id].set_state(policy_state)
+
+                        #print("w_seq - ", policy_id, ": ", self._weights_seq_by_agent_no[policy_id])
+                    for agent in self.reverse_agents_map[policy_id]:
                         # Update our weights_seq_no, if the new one is > 0.
                         if weights_seq_no > 0:
-                            self._weights_seq_by_agent_no[policy_id] = weights_seq_no
+                            self._weights_seq_by_agent_no[agent] = weights_seq_no
 
-                        print("w_seq - ", policy_id, ": ", self._weights_seq_by_agent_no[policy_id])
-
-                    if self._blocked_on_state_by_agent[policy_id] is True:
-                        print("Blocked on state - ", policy_id, ": ", self._blocked_on_state_by_agent[policy_id])
-                        self._send_set_state_message(policy_id, only_get_state = False)
-                        self._blocked_on_state_by_agent[policy_id] = False
+                        if self._blocked_on_state_by_agent[agent] is True:
+                            #print("Blocked on state - ", policy_id, ": ", self._blocked_on_state_by_agent[policy_id])
+                            self._send_set_state_message(policy_id, only_get_state = False)
+                            self._blocked_on_state_by_agent[policy_id] = False
             else:
                 raise ValueError("Expected multi-policy state dictionary.")
 
-
-
+    def build_reverse_mapping(self, agent_ids, policy_mapping_fn):
+        reverse_map = {}
+        for agent_id in agent_ids:
+            policy_id = policy_mapping_fn(agent_id)
+            if policy_id is None:
+                continue
+            if policy_id not in reverse_map:
+                reverse_map[policy_id] = []
+            reverse_map[policy_id].append(agent_id)
+        return reverse_map
 
     def _client_message_listener(self):
         """Entry point for the listener thread."""
@@ -331,7 +340,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
 
                 # Client requests the state (model weights).
                 elif msg_type == rllink.GET_STATE:
-                    self._send_set_state_message([], only_get_state=True)
+                    self._send_set_state_message("", only_get_state=True)
 
                 # Clients requests some (relevant) config information.
                 elif msg_type == rllink.GET_CONFIG:
@@ -417,26 +426,20 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
                     }
                 extra_model_outputs.append(timestep_dict)
 
-            act_space = {
-                "policy_1": gym.spaces.Discrete(3),
-                "policy_2": gym.spaces.Box(0, 1.0, shape=(2,), dtype=np.float32),
-                "policy_3": gym.spaces.MultiDiscrete([2, 2], dtype=np.int32),
-                "policy_4": gym.spaces.Discrete(3)
-            }
-
             extra_model_outputs = []
 
             for t in range(timesteps):
                 timestep_dict = {}
                 for agent_id, agent_data in episode_data["agents"].items():
-                    space = act_space[agent_id]
+                    #print("Spaces: ", self.get_spaces_for_module())
+                    #space = self.get_spaces()[agent_id]
                     logits = agent_data["extra_model_outputs"]["action_dist_inputs"][t]
                     logp = agent_data["extra_model_outputs"]["action_logp"][t]
 
                     # Valida dimensiones
                     logits = np.asarray(logits, dtype=np.float32)
                     logp = np.asarray(logp, dtype=np.float32)
-
+                    """
                     if isinstance(space, Discrete):
                         assert logits.shape == (
                             space.n,), f"{agent_id}: expected shape {(space.n,)}, got {logits.shape}"
@@ -449,7 +452,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
                         assert logits.shape == (
                             expected,), f"{agent_id}: expected shape {(expected,)}, got {logits.shape}"
                     else:
-                        raise ValueError(f"Unsupported action space for agent {agent_id}")
+                        raise ValueError(f"Unsupported action space for agent {agent_id}")"""
 
                     timestep_dict[agent_id] = {
                         "action_dist_inputs": logits,
@@ -470,19 +473,12 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             }
             truncateds["__all__"] = all(truncateds.values())
 
-            POLICY_BY_AGENT = {
-                "policy_1": "policy_1",
-                "policy_2": "policy_2",
-                "policy_3": "policy_3",
-                "policy_4": "policy_4",
-            }
             agents_data = episode_data["agents"]
 
             module_ids = {
-                agent_id: POLICY_BY_AGENT[agent_id]  # o policy_mapping_fn(agent_id)
+                agent_id: self.policy_mapping_fn(agent_id)
                 for agent_id in agents_data.keys()
             }
-
 
             # Crear el MultiAgentEpisode
             episode = MultiAgentEpisode(
@@ -522,26 +518,15 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
             "action": act_space
         }
 
-    """    def get_rl_module_spec_for_module(self, module_id, spaces, inference_only=False):
-            # Usa la clase del módulo base desde el config
-            module_class = self.module.__class__
-    
-            return RLModuleSpec(
-                module_class=module_class,
-                observation_space=spaces["obs"],
-                action_space=spaces["action"],
-                model_config=self.config.model,
-                catalog_class=self.config.get("catalog_class", None),
-                inference_only=inference_only,
-            )
-    """
 
-    def _send_set_state_message(self, policy_ids, only_get_state):
+
+    def _send_set_state_message(self, policy_id, only_get_state):
         onnx_models = {}
 
+        # For clarity: module_id = policy_id
         for module_id in self.get_multi_agent_module_ids():
 
-            if module_id not in policy_ids and not only_get_state:
+            if module_id != policy_id and not only_get_state:
                 continue
 
             spaces = self.get_spaces_for_module(module_id)
@@ -654,9 +639,9 @@ def _send_message(sock_, message: dict):
     header = str(len(body)).zfill(8).encode("utf-8")
     try:
         sock_.sendall(header + body)
-        print("Sending message..")
+        #print("Sending message..")
         #print("Header:", header)
-        print("Type:", message["type"])
+        print("Sent:", message["type"])
         #print("Full Message (hex):", (header + body).hex(' ', 1))  # Byte por byte en hex
         #print("As UTF-8 string:", (header + body).decode('utf-8', errors='replace'))
     except Exception as e:
