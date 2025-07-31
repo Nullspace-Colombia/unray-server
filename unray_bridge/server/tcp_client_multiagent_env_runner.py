@@ -117,7 +117,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
 
         self.reverse_agents_map = self.build_reverse_mapping(agent_ids, self.policy_mapping_fn)
 
-        #print("mapping: ", self._weights_seq_by_agent_no)
+        print("mapping: ", self._weights_seq_by_agent_no)
 
         # Start a background thread for client communication.
         self.thread = threading.Thread(
@@ -277,7 +277,7 @@ class TcpClientMultiAgentEnvRunner(EnvRunner, Checkpointable):
                 for policy_id, policy_state in rl_module_state.items():
                     #print("policy_id: ",policy_id)
 
-                    if weights_seq_no == 0 or self._weights_seq_by_agent_no[policy_id] < weights_seq_no:
+                    if weights_seq_no == 0 or self._weights_seq_by_agent_no[self.reverse_agents_map[policy_id][0]] < weights_seq_no:
                         if policy_id not in self.module:
                             raise ValueError(f"Policy {policy_id} not found in module.")
                         self.module[policy_id].set_state(policy_state)

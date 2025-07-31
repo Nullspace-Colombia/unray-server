@@ -102,6 +102,9 @@ parser.add_argument(
 if __name__ == "__main__":
     args = parser.parse_args()
     # Define the RLlib (server) config.
+    def policy_mapping_fn(agent_id):
+        return "default"
+
     base_config = (
         get_trainable_cls(args.algo)
         .get_default_config()
@@ -110,8 +113,6 @@ if __name__ == "__main__":
             action_space=gym.spaces.Discrete(2),
             # EnvRunners listen on `port` + their worker index.
             env_config={"port": args.port},
-
-
         )
         .env_runners(
             # Point RLlib to the custom EnvRunner to be used here.
@@ -125,6 +126,8 @@ if __name__ == "__main__":
             train_batch_size=1800,
 
         )
+        .multi_agent(policy_mapping_fn=policy_mapping_fn)
+
         .rl_module(model_config=DefaultModelConfig(vf_share_layers=True))
         #.learners(num_learners=0, num_gpus_per_learner=1)
     )

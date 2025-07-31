@@ -60,10 +60,11 @@ class CustomTcpClientInferenceEnvRunner(TcpClientInferenceEnvRunner):
         print("msg type: ", msg_type)
         #print("msg body: ", msg_body)
         print("Blocked on state :: Process", self._blocked_on_state)
+        agent_ids = list(msg_body["episodes"][0]["agents"].keys())
 
         episodes = []
         for episode_data in msg_body["episodes"]:
-            default_data = episode_data["agents"]["default"]
+            default_data = episode_data["agents"][agent_ids[0]]
             episode = SingleAgentEpisode(
                 observation_space=self.config.observation_space,
                 observations=[np.array(o) for o in default_data[Columns.OBS]],
