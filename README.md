@@ -1,3 +1,6 @@
+# Disclaimer
+Unray is currently under heavy development, as for august 2025, we still have some announcements due. This repo might or might not be the final for server side code.
+
 # About Unray
 
 Framework for communication between Unreal Engine and Python.
